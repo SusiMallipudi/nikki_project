@@ -1,15 +1,21 @@
 """
 Index (vectorize) ticket CSV splits into ChromaDB. Run once (or when data changes).
-Creates chroma_db_part_1 .. chroma_db_part_6. Do not run repeatedly.
+Reads from data/; creates ChromaDB in data/db/ (chroma_db_part_1 .. chroma_db_part_6).
 """
 import os
 import pandas as pd
 import chromadb
 from chromadb.utils import embedding_functions
 
-from config import N_SPLITS, DB_PREFIX, COLLECTION_NAME, CSV_PREFIX, EMBEDDING_MODEL
-
+DATA_DIR = "data"
+DB_DIR = os.path.join(DATA_DIR, "db")
+N_SPLITS = 6
+DB_PREFIX = "chroma_db_part"
+COLLECTION_NAME = "tickets"
+CSV_PREFIX = "aa_dataset-tickets-en-only"
+EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 BATCH_SIZE = 256
+
 EF = embedding_functions.SentenceTransformerEmbeddingFunction(model_name=EMBEDDING_MODEL)
 
 
@@ -38,13 +44,14 @@ def build_document(row):
 
 def index_one_split(part_num: int):
     """Load one split CSV into its ChromaDB. Overwrites existing collection data if re-run."""
-    csv_path = f"{CSV_PREFIX}-part-{part_num}-of-{N_SPLITS}.csv"
-    db_path = f"{DB_PREFIX}_{part_num}"
+    csv_path = os.path.join(DATA_DIR, f"{CSV_PREFIX}-part-{part_num}-of-{N_SPLITS}.csv")
+    db_path = os.path.join(DB_DIR, f"{DB_PREFIX}_{part_num}")
 
     if not os.path.isfile(csv_path):
         print(f"  Skip part {part_num}: {csv_path} not found")
         return
 
+    os.makedirs(DB_DIR, exist_ok=True)
     df = pd.read_csv(csv_path)
     client = chromadb.PersistentClient(path=db_path)
     collection = client.get_or_create_collection(

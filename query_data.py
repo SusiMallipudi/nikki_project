@@ -1,24 +1,55 @@
 """
 Query ChromaDB only (no indexing). Use after index_data.py has been run once.
-Queries all 6 DBs in parallel, top 3 per chunk; optionally answers with Gemini.
+Queries all 6 DBs in parallel, top 3 per chunk; answers with Gemini. All LLM code here.
 """
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import chromadb
 from chromadb.utils import embedding_functions
+from dotenv import load_dotenv
+from google import genai
+from google.genai import types
 
-from config import N_SPLITS, DB_PREFIX, COLLECTION_NAME, EMBEDDING_MODEL
-from gemini_client import generate
+load_dotenv()
 
+DATA_DIR = "data"
+DB_DIR = os.path.join(DATA_DIR, "db")
+N_SPLITS = 6
+DB_PREFIX = "chroma_db_part"
+COLLECTION_NAME = "tickets"
+EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 TOP_K_PER_CHUNK = 3
+GEMINI_MODEL = "gemini-2.5-flash"
+
 EF = embedding_functions.SentenceTransformerEmbeddingFunction(model_name=EMBEDDING_MODEL)
+
+
+def _gemini_generate(
+    prompt: str,
+    *,
+    model: str = GEMINI_MODEL,
+    system_instruction: str | None = None,
+    temperature: float = 0.3,
+    api_key: str | None = None,
+) -> str:
+    """Call Gemini LLM and return generated text. All LLM code in this file."""
+    key = api_key or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    if not key:
+        raise ValueError("No Gemini API key: set GEMINI_API_KEY or pass gemini_api_key.")
+    client = genai.Client(api_key=key)
+    config = types.GenerateContentConfig(
+        temperature=temperature,
+        system_instruction=system_instruction,
+    )
+    response = client.models.generate_content(model=model, contents=prompt, config=config)
+    return response.text or ""
 
 
 def _query_one_chunk(args):
     """Query a single ChromaDB; returns list of results for that chunk."""
     chunk_id, query_text, n_per_chunk = args
-    path = f"{DB_PREFIX}_{chunk_id}"
+    path = os.path.join(DB_DIR, f"{DB_PREFIX}_{chunk_id}")
     if not os.path.isdir(path):
         return []
     client = chromadb.PersistentClient(path=path)
@@ -37,7 +68,7 @@ def _query_one_chunk(args):
 
 def query_all_splits(query_text: str, n_per_chunk: int = TOP_K_PER_CHUNK, max_total: int | None = None):
     """Query all ChromaDB splits in parallel; top n_per_chunk from each, merge by distance."""
-    chunk_ids = [i for i in range(1, N_SPLITS + 1) if os.path.isdir(f"{DB_PREFIX}_{i}")]
+    chunk_ids = [i for i in range(1, N_SPLITS + 1) if os.path.isdir(os.path.join(DB_DIR, f"{DB_PREFIX}_{i}"))]
     if not chunk_ids:
         return []
 
@@ -75,20 +106,26 @@ def print_chunk_results(results: list, doc_preview_len: int = 400):
     print(f"\n{'='*60}\n")
 
 
-def answer_with_gemini(query: str, context_docs: list, model: str = "gemini-2.5-flash") -> str:
-    """Build RAG prompt and get answer from Gemini."""
+def answer_with_gemini(
+    query: str,
+    context_docs: list,
+    model: str = GEMINI_MODEL,
+    api_key: str | None = None,
+) -> str:
+    """Build RAG prompt and get answer from Gemini. All LLM code in this file."""
     context = "\n\n---\n\n".join(d["document"] for d in context_docs)
     system = (
         "You are a helpful support assistant. Answer based only on the following ticket context. "
         "If the context does not contain enough information, say so briefly."
     )
     prompt = f"Context from knowledge base:\n\n{context}\n\nQuestion: {query}"
-    return generate(
+    key = api_key or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    return _gemini_generate(
         prompt,
         model=model,
         system_instruction=system,
         temperature=0.3,
-        api_key=os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"),
+        api_key=key,
     )
 
 
@@ -106,7 +143,7 @@ def main():
     print("\nQuerying ChromaDB (parallel, top 3 per chunk)...")
     results = query_all_splits(query, n_per_chunk=TOP_K_PER_CHUNK, max_total=None)
     if not results:
-        print("No results. Run index_data.py first to create chroma_db_part_1..6.")
+        print("No results. Run index_data.py first to create data/db/chroma_db_part_1..6.")
         sys.exit(1)
     print_chunk_results(results)
     if chunks_only:

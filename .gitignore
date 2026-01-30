@@ -14,4 +14,4 @@ __pycache__/
 venv/
 
 # ChromaDB data (recreate with: python3 index_data.py)
-chroma_db_part_*/
+data/db/
